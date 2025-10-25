@@ -147,6 +147,7 @@ extern uint8_t                     pc98_pal_digital[8];    /* G R B    0x0..0x7 
 
 extern bool logBuffSuppressConsole;
 extern bool logBuffSuppressConsoleNeedUpdate;
+extern bool log_screen_writes;
 
 void DEBUG_PrintGUS();
 
@@ -2620,22 +2621,29 @@ bool ParseCommand(char* str) {
 		return true;
 	}
 
-	if (command == "RUNWATCH") {
-		auto oldcore = cpudecoder;
-		runnormal = false;
-		inhibit_int_breakpoint = true;
-		DEBUG_Run(1,true);
-		inhibit_int_breakpoint = false;
-		cpudecoder = oldcore;
-		debug_running = true;
-		debugging = true;
-		CBreakpoint::ActivateBreakpoints();
-		mainMenu.get_item("debugger_rundebug").check(false).refresh_item(mainMenu);
-		mainMenu.get_item("debugger_runnormal").check(false).refresh_item(mainMenu);
-		mainMenu.get_item("debugger_runwatch").check(true).refresh_item(mainMenu);
-		DEBUG_DrawScreen();
-		return true;
-	}
+        if (command == "RUNWATCH") {
+                auto oldcore = cpudecoder;
+                runnormal = false;
+                inhibit_int_breakpoint = true;
+                DEBUG_Run(1,true);
+                inhibit_int_breakpoint = false;
+                cpudecoder = oldcore;
+                debug_running = true;
+                debugging = true;
+                CBreakpoint::ActivateBreakpoints();
+                mainMenu.get_item("debugger_rundebug").check(false).refresh_item(mainMenu);
+                mainMenu.get_item("debugger_runnormal").check(false).refresh_item(mainMenu);
+                mainMenu.get_item("debugger_runwatch").check(true).refresh_item(mainMenu);
+                DEBUG_DrawScreen();
+                return true;
+        }
+
+        if (command == "LOGVID") {
+                log_screen_writes = !log_screen_writes;
+                DEBUG_ShowMsg("DEBUG: Screen write interrupt logging %s.\n",
+                        log_screen_writes ? "enabled" : "disabled");
+                return true;
+        }
 
     if (command == "A20") {
         void MEM_A20_Enable(bool enabled);
@@ -3982,8 +3990,9 @@ bool ParseCommand(char* str) {
 		DEBUG_ShowMsg("SV [filename]             - Save var list in file.\n");
 		DEBUG_ShowMsg("LV [filename]             - Load var list from file.\n");
 
-		DEBUG_ShowMsg("VRD                       - Redraw video.\n");
-		DEBUG_ShowMsg("VGA cmd                   - VGA related debugging commands.\n");
+                DEBUG_ShowMsg("VRD                       - Redraw video.\n");
+                DEBUG_ShowMsg("LOGVID                    - Toggle screen write interrupt logging.\n");
+                DEBUG_ShowMsg("VGA cmd                   - VGA related debugging commands.\n");
 		DEBUG_ShowMsg("PC98 cmd                  - PC98 related debugging commands.\n");
 		DEBUG_ShowMsg("EMU MEM/MACHINE           - Show emulator memory or machine info.\n");
 		DEBUG_ShowMsg("MEMDUMP [seg]:[off] [len] - Write memory to file memdump.txt.\n");

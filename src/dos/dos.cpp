@@ -74,6 +74,7 @@ extern bool use_quick_reboot, j3100_start;
 extern bool enable_config_as_shell_commands;
 extern bool checkwat, loadlang, pcibus_enable;
 extern bool log_int21, log_fileio, pipetmpdev;
+extern bool log_screen_writes;
 extern bool chinasea;
 #if defined(USE_TTF)
 extern bool ttf_dosv;
@@ -996,10 +997,45 @@ void DOS_FlushSTDIN(void) {
     LOG(LOG_DOSMISC, LOG_DEBUG)("Flush STDIN");
     uint8_t handle=RealHandle(STDIN);
     if (handle!=0xFF && Files[handle] && Files[handle]->IsName("CON")) {
-	    uint8_t c;uint16_t n;
-	    while (DOS_GetSTDINStatus()) {
-		    n=1; DOS_ReadFile(STDIN,&c,&n);
-	    }
+            uint8_t c;uint16_t n;
+            while (DOS_GetSTDINStatus()) {
+                    n=1; DOS_ReadFile(STDIN,&c,&n);
+            }
+    }
+}
+
+static bool ShouldLogInt21ScreenWrite(const uint8_t ah, const uint8_t dl)
+{
+    switch (ah) {
+    case 0x02: // display output
+        return true;
+    case 0x06: // direct console output/input
+        return dl != 0xFF;
+    case 0x09: // display string
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void LogInt21CallerIfNeeded(const uint8_t ah, const uint8_t dl)
+{
+    if (!log_screen_writes)
+        return;
+
+    if (!ShouldLogInt21ScreenWrite(ah, dl))
+        return;
+
+    if (cpu.pmode && !GETFLAG(VM))
+        return;
+
+    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
+    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
+
+    if (ah == 0x02 || (ah == 0x06 && dl != 0xFF)) {
+        LOG_MSG("INT 21h AH=%02X DL=%02X from %04X:%04X", ah, dl, return_cs, return_ip);
+    } else {
+        LOG_MSG("INT 21h AH=%02X from %04X:%04X", ah, return_cs, return_ip);
     }
 }
 
@@ -1013,6 +1049,8 @@ static Bitu DOS_21Handler(void) {
     if (log_int21) {
         LOG(LOG_DOSMISC, LOG_DEBUG)("Executing interrupt 21, ah=%x, al=%x", reg_ah, reg_al);
     }
+
+    LogInt21CallerIfNeeded(reg_ah, reg_dl);
 
     /* Real MS-DOS behavior:
      *   If HIMEM.SYS is loaded and CONFIG.SYS says DOS=HIGH, DOS will load itself into the HMA area.

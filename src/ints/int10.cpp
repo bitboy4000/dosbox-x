@@ -25,6 +25,7 @@
 #include "menu.h"
 #include "callback.h"
 #include "regs.h"
+#include "cpu.h"
 #include "inout.h"
 #include "int10.h"
 #include "mouse.h"
@@ -38,6 +39,39 @@ static Bitu call_10 = 0;
 static bool warned_ff=false;
 extern bool enable_vga_8bit_dac;
 extern bool vga_8bit_dac;
+extern bool log_screen_writes;
+
+static bool ShouldLogInt10ScreenWrite(const uint8_t ah)
+{
+    switch (ah) {
+    case 0x06: // scroll up
+    case 0x07: // scroll down
+    case 0x09: // write character and attribute
+    case 0x0A: // write character only
+    case 0x0C: // write pixel
+    case 0x0E: // teletype output
+    case 0x13: // write string
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void LogInt10CallerIfNeeded(const uint8_t ah, const uint8_t al)
+{
+    if (!log_screen_writes)
+        return;
+
+    if (!ShouldLogInt10ScreenWrite(ah))
+        return;
+
+    if (cpu.pmode && !GETFLAG(VM))
+        return;
+
+    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
+    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
+    LOG_MSG("INT 10h AH=%02X AL=%02X from %04X:%04X", ah, al, return_cs, return_ip);
+}
 extern bool wpExtChar;
 extern bool ega200;
 extern int wpType;
@@ -69,9 +103,11 @@ Bitu INT10_Handler(void) {
 	//      within the DOS "box" will not work properly.
 	if(IS_DOSV && DOSV_CheckCJKVideoMode() && reg_ah != 0x03) DOSV_OffCursor();
 	else if(J3_IsJapanese()) J3_OffCursor();
-	INT10_SetCurMode();
+    INT10_SetCurMode();
 
-	switch (reg_ah) {
+    LogInt10CallerIfNeeded(reg_ah, reg_al);
+
+    switch (reg_ah) {
 	case 0x00:								/* Set VideoMode */
 		Mouse_BeforeNewVideoMode(true);
 		SetTrueVideoMode(reg_al);
