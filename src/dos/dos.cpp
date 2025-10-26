@@ -50,6 +50,9 @@
 #include "render.h"
 #include "jfont.h"
 #include "../ints/int10.h"
+#if C_DEBUG
+#include "debug.h"
+#endif
 #include "pic.h"
 #include "sdlmain.h"
 #if defined(WIN32)
@@ -1034,9 +1037,32 @@ static void LogInt21CallerIfNeeded(const uint8_t ah, const uint8_t dl)
 
     if (ah == 0x02 || (ah == 0x06 && dl != 0xFF)) {
         LOG_MSG("INT 21h AH=%02X DL=%02X from %04X:%04X", ah, dl, return_cs, return_ip);
+#if C_DEBUG
+        DEBUG_ShowMsg("INT 21h AH=%02X DL=%02X from %04X:%04X", ah, dl, return_cs, return_ip);
+#endif
     } else {
         LOG_MSG("INT 21h AH=%02X from %04X:%04X", ah, return_cs, return_ip);
+#if C_DEBUG
+        DEBUG_ShowMsg("INT 21h AH=%02X from %04X:%04X", ah, return_cs, return_ip);
+#endif
     }
+}
+
+static void LogInt29CallerIfNeeded(const uint8_t al)
+{
+    if (!log_screen_writes)
+        return;
+
+    if (cpu.pmode && !GETFLAG(VM))
+        return;
+
+    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
+    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
+
+    LOG_MSG("INT 29h AL=%02X from %04X:%04X", al, return_cs, return_ip);
+#if C_DEBUG
+    DEBUG_ShowMsg("INT 29h AL=%02X from %04X:%04X", al, return_cs, return_ip);
+#endif
 }
 
 static Bitu DOS_21Handler(void) {
@@ -3653,9 +3679,11 @@ static void ClearAnsi29h(void)
 
 static Bitu DOS_29Handler(void)
 {
-	uint16_t tmp_ax = reg_ax;
-	uint16_t tmp_bx = reg_bx;
-	uint16_t tmp_cx = reg_cx;
+    LogInt29CallerIfNeeded(reg_al);
+
+    uint16_t tmp_ax = reg_ax;
+    uint16_t tmp_bx = reg_bx;
+    uint16_t tmp_cx = reg_cx;
 	uint16_t tmp_dx = reg_dx;
 	Bitu i;
 	uint8_t col,row,page;

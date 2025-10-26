@@ -32,6 +32,9 @@
 #include "setup.h"
 #include "render.h"
 #include "jfont.h"
+#if C_DEBUG
+#include "debug.h"
+#endif
 
 Int10Data int10;
 bool blinking=true;
@@ -71,6 +74,9 @@ static void LogInt10CallerIfNeeded(const uint8_t ah, const uint8_t al)
     const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
     const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
     LOG_MSG("INT 10h AH=%02X AL=%02X from %04X:%04X", ah, al, return_cs, return_ip);
+#if C_DEBUG
+    DEBUG_ShowMsg("INT 10h AH=%02X AL=%02X from %04X:%04X", ah, al, return_cs, return_ip);
+#endif
 }
 extern bool wpExtChar;
 extern bool ega200;
