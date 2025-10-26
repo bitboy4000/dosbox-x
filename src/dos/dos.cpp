@@ -37,6 +37,7 @@
 #include "paging.h"
 #include "callback.h"
 #include "regs.h"
+#include "cpu.h"
 #include "timer.h"
 #include "menu.h"
 #include "menudef.h"
@@ -1021,6 +1022,32 @@ static bool ShouldLogInt21ScreenWrite(const uint8_t ah, const uint8_t dl)
     }
 }
 
+struct ScreenWriteCaller {
+    uint16_t cs = 0;
+    uint32_t ip = 0;
+    bool is_32bit = false;
+};
+
+static ScreenWriteCaller GetScreenWriteCaller()
+{
+    ScreenWriteCaller caller = {};
+
+    const PhysPt stack_base = SegPhys(ss);
+    const uint32_t sp_index = reg_esp & cpu.stack.mask;
+
+    if (cpu.stack.big) {
+        caller.ip = mem_readd(stack_base + sp_index);
+        caller.cs = static_cast<uint16_t>(mem_readd(stack_base + ((reg_esp + 4) & cpu.stack.mask)));
+        caller.is_32bit = true;
+    } else {
+        caller.ip = mem_readw(stack_base + sp_index);
+        caller.cs = mem_readw(stack_base + ((reg_esp + 2) & cpu.stack.mask));
+        caller.is_32bit = false;
+    }
+
+    return caller;
+}
+
 static void LogInt21CallerIfNeeded(const uint8_t ah, const uint8_t dl)
 {
     if (!log_screen_writes)
@@ -1029,21 +1056,27 @@ static void LogInt21CallerIfNeeded(const uint8_t ah, const uint8_t dl)
     if (!ShouldLogInt21ScreenWrite(ah, dl))
         return;
 
-    if (cpu.pmode && !GETFLAG(VM))
-        return;
-
-    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
-    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 21h AH=%02X DL=%02X from %04X:%08X"
+                                    : "INT 21h AH=%02X DL=%02X from %04X:%04X";
+    const char *const fmt_no_dl = (caller.is_32bit)
+                                          ? "INT 21h AH=%02X from %04X:%08X"
+                                          : "INT 21h AH=%02X from %04X:%04X";
 
     if (ah == 0x02 || (ah == 0x06 && dl != 0xFF)) {
-        LOG_MSG("INT 21h AH=%02X DL=%02X from %04X:%04X", ah, dl, return_cs, return_ip);
+        LOG_MSG(fmt, ah, dl, caller.cs,
+                caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #if C_DEBUG
-        DEBUG_ShowMsg("INT 21h AH=%02X DL=%02X from %04X:%04X", ah, dl, return_cs, return_ip);
+        DEBUG_ShowMsg(fmt, ah, dl, caller.cs,
+                      caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #endif
     } else {
-        LOG_MSG("INT 21h AH=%02X from %04X:%04X", ah, return_cs, return_ip);
+        LOG_MSG(fmt_no_dl, ah, caller.cs,
+                caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #if C_DEBUG
-        DEBUG_ShowMsg("INT 21h AH=%02X from %04X:%04X", ah, return_cs, return_ip);
+        DEBUG_ShowMsg(fmt_no_dl, ah, caller.cs,
+                      caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #endif
     }
 }
@@ -1053,15 +1086,16 @@ static void LogInt29CallerIfNeeded(const uint8_t al)
     if (!log_screen_writes)
         return;
 
-    if (cpu.pmode && !GETFLAG(VM))
-        return;
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 29h AL=%02X from %04X:%08X"
+                                    : "INT 29h AL=%02X from %04X:%04X";
 
-    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
-    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
-
-    LOG_MSG("INT 29h AL=%02X from %04X:%04X", al, return_cs, return_ip);
+    LOG_MSG(fmt, al, caller.cs,
+            caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #if C_DEBUG
-    DEBUG_ShowMsg("INT 29h AL=%02X from %04X:%04X", al, return_cs, return_ip);
+    DEBUG_ShowMsg(fmt, al, caller.cs,
+                  caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #endif
 }
 

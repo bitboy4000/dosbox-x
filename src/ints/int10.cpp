@@ -44,6 +44,32 @@ extern bool enable_vga_8bit_dac;
 extern bool vga_8bit_dac;
 extern bool log_screen_writes;
 
+struct ScreenWriteCaller {
+    uint16_t cs = 0;
+    uint32_t ip = 0;
+    bool is_32bit = false;
+};
+
+static ScreenWriteCaller GetScreenWriteCaller()
+{
+    ScreenWriteCaller caller = {};
+
+    const PhysPt stack_base = SegPhys(ss);
+    const uint32_t sp_index = reg_esp & cpu.stack.mask;
+
+    if (cpu.stack.big) {
+        caller.ip = mem_readd(stack_base + sp_index);
+        caller.cs = static_cast<uint16_t>(mem_readd(stack_base + ((reg_esp + 4) & cpu.stack.mask)));
+        caller.is_32bit = true;
+    } else {
+        caller.ip = mem_readw(stack_base + sp_index);
+        caller.cs = mem_readw(stack_base + ((reg_esp + 2) & cpu.stack.mask));
+        caller.is_32bit = false;
+    }
+
+    return caller;
+}
+
 static bool ShouldLogInt10ScreenWrite(const uint8_t ah)
 {
     switch (ah) {
@@ -68,14 +94,16 @@ static void LogInt10CallerIfNeeded(const uint8_t ah, const uint8_t al)
     if (!ShouldLogInt10ScreenWrite(ah))
         return;
 
-    if (cpu.pmode && !GETFLAG(VM))
-        return;
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 10h AH=%02X AL=%02X from %04X:%08X"
+                                    : "INT 10h AH=%02X AL=%02X from %04X:%04X";
 
-    const uint16_t return_ip = real_readw(SegValue(ss), reg_sp);
-    const uint16_t return_cs = real_readw(SegValue(ss), reg_sp + 2);
-    LOG_MSG("INT 10h AH=%02X AL=%02X from %04X:%04X", ah, al, return_cs, return_ip);
+    LOG_MSG(fmt, ah, al, caller.cs,
+            caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #if C_DEBUG
-    DEBUG_ShowMsg("INT 10h AH=%02X AL=%02X from %04X:%04X", ah, al, return_cs, return_ip);
+    DEBUG_ShowMsg(fmt, ah, al, caller.cs,
+                  caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
 #endif
 }
 extern bool wpExtChar;
