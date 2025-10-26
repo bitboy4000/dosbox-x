@@ -37,6 +37,7 @@
 #include "paging.h"
 #include "callback.h"
 #include "regs.h"
+#include "cpu.h"
 #include "timer.h"
 #include "menu.h"
 #include "menudef.h"
@@ -50,6 +51,9 @@
 #include "render.h"
 #include "jfont.h"
 #include "../ints/int10.h"
+#if C_DEBUG
+#include "debug.h"
+#endif
 #include "pic.h"
 #include "sdlmain.h"
 #if defined(WIN32)
@@ -74,6 +78,7 @@ extern bool use_quick_reboot, j3100_start;
 extern bool enable_config_as_shell_commands;
 extern bool checkwat, loadlang, pcibus_enable;
 extern bool log_int21, log_fileio, pipetmpdev;
+extern bool log_screen_writes;
 extern bool chinasea;
 #if defined(USE_TTF)
 extern bool ttf_dosv;
@@ -996,11 +1001,102 @@ void DOS_FlushSTDIN(void) {
     LOG(LOG_DOSMISC, LOG_DEBUG)("Flush STDIN");
     uint8_t handle=RealHandle(STDIN);
     if (handle!=0xFF && Files[handle] && Files[handle]->IsName("CON")) {
-	    uint8_t c;uint16_t n;
-	    while (DOS_GetSTDINStatus()) {
-		    n=1; DOS_ReadFile(STDIN,&c,&n);
-	    }
+            uint8_t c;uint16_t n;
+            while (DOS_GetSTDINStatus()) {
+                    n=1; DOS_ReadFile(STDIN,&c,&n);
+            }
     }
+}
+
+static bool ShouldLogInt21ScreenWrite(const uint8_t ah, const uint8_t dl)
+{
+    switch (ah) {
+    case 0x02: // display output
+        return true;
+    case 0x06: // direct console output/input
+        return dl != 0xFF;
+    case 0x09: // display string
+        return true;
+    default:
+        return false;
+    }
+}
+
+struct ScreenWriteCaller {
+    uint16_t cs = 0;
+    uint32_t ip = 0;
+    bool is_32bit = false;
+};
+
+static ScreenWriteCaller GetScreenWriteCaller()
+{
+    ScreenWriteCaller caller = {};
+
+    const PhysPt stack_base = SegPhys(ss);
+    const uint32_t sp_index = reg_esp & cpu.stack.mask;
+
+    if (cpu.stack.big) {
+        caller.ip = mem_readd(stack_base + sp_index);
+        caller.cs = static_cast<uint16_t>(mem_readd(stack_base + ((reg_esp + 4) & cpu.stack.mask)));
+        caller.is_32bit = true;
+    } else {
+        caller.ip = mem_readw(stack_base + sp_index);
+        caller.cs = mem_readw(stack_base + ((reg_esp + 2) & cpu.stack.mask));
+        caller.is_32bit = false;
+    }
+
+    return caller;
+}
+
+static void LogInt21CallerIfNeeded(const uint8_t ah, const uint8_t dl)
+{
+    if (!log_screen_writes)
+        return;
+
+    if (!ShouldLogInt21ScreenWrite(ah, dl))
+        return;
+
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 21h AH=%02X DL=%02X from %04X:%08X"
+                                    : "INT 21h AH=%02X DL=%02X from %04X:%04X";
+    const char *const fmt_no_dl = (caller.is_32bit)
+                                          ? "INT 21h AH=%02X from %04X:%08X"
+                                          : "INT 21h AH=%02X from %04X:%04X";
+
+    if (ah == 0x02 || (ah == 0x06 && dl != 0xFF)) {
+        LOG_MSG(fmt, ah, dl, caller.cs,
+                caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#if C_DEBUG
+        DEBUG_ShowMsg(fmt, ah, dl, caller.cs,
+                      caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#endif
+    } else {
+        LOG_MSG(fmt_no_dl, ah, caller.cs,
+                caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#if C_DEBUG
+        DEBUG_ShowMsg(fmt_no_dl, ah, caller.cs,
+                      caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#endif
+    }
+}
+
+static void LogInt29CallerIfNeeded(const uint8_t al)
+{
+    if (!log_screen_writes)
+        return;
+
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 29h AL=%02X from %04X:%08X"
+                                    : "INT 29h AL=%02X from %04X:%04X";
+
+    LOG_MSG(fmt, al, caller.cs,
+            caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#if C_DEBUG
+    DEBUG_ShowMsg(fmt, al, caller.cs,
+                  caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#endif
 }
 
 static Bitu DOS_21Handler(void) {
@@ -1013,6 +1109,8 @@ static Bitu DOS_21Handler(void) {
     if (log_int21) {
         LOG(LOG_DOSMISC, LOG_DEBUG)("Executing interrupt 21, ah=%x, al=%x", reg_ah, reg_al);
     }
+
+    LogInt21CallerIfNeeded(reg_ah, reg_dl);
 
     /* Real MS-DOS behavior:
      *   If HIMEM.SYS is loaded and CONFIG.SYS says DOS=HIGH, DOS will load itself into the HMA area.
@@ -3615,9 +3713,11 @@ static void ClearAnsi29h(void)
 
 static Bitu DOS_29Handler(void)
 {
-	uint16_t tmp_ax = reg_ax;
-	uint16_t tmp_bx = reg_bx;
-	uint16_t tmp_cx = reg_cx;
+    LogInt29CallerIfNeeded(reg_al);
+
+    uint16_t tmp_ax = reg_ax;
+    uint16_t tmp_bx = reg_bx;
+    uint16_t tmp_cx = reg_cx;
 	uint16_t tmp_dx = reg_dx;
 	Bitu i;
 	uint8_t col,row,page;

@@ -44,6 +44,7 @@ using namespace std;
 
 bool log_int21 = false;
 bool log_fileio = false;
+bool log_screen_writes = false;
 extern bool logging_con;
 
 static bool has_LOG_Init = false;

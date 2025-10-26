@@ -25,12 +25,16 @@
 #include "menu.h"
 #include "callback.h"
 #include "regs.h"
+#include "cpu.h"
 #include "inout.h"
 #include "int10.h"
 #include "mouse.h"
 #include "setup.h"
 #include "render.h"
 #include "jfont.h"
+#if C_DEBUG
+#include "debug.h"
+#endif
 
 Int10Data int10;
 bool blinking=true;
@@ -38,6 +42,70 @@ static Bitu call_10 = 0;
 static bool warned_ff=false;
 extern bool enable_vga_8bit_dac;
 extern bool vga_8bit_dac;
+extern bool log_screen_writes;
+
+struct ScreenWriteCaller {
+    uint16_t cs = 0;
+    uint32_t ip = 0;
+    bool is_32bit = false;
+};
+
+static ScreenWriteCaller GetScreenWriteCaller()
+{
+    ScreenWriteCaller caller = {};
+
+    const PhysPt stack_base = SegPhys(ss);
+    const uint32_t sp_index = reg_esp & cpu.stack.mask;
+
+    if (cpu.stack.big) {
+        caller.ip = mem_readd(stack_base + sp_index);
+        caller.cs = static_cast<uint16_t>(mem_readd(stack_base + ((reg_esp + 4) & cpu.stack.mask)));
+        caller.is_32bit = true;
+    } else {
+        caller.ip = mem_readw(stack_base + sp_index);
+        caller.cs = mem_readw(stack_base + ((reg_esp + 2) & cpu.stack.mask));
+        caller.is_32bit = false;
+    }
+
+    return caller;
+}
+
+static bool ShouldLogInt10ScreenWrite(const uint8_t ah)
+{
+    switch (ah) {
+    case 0x06: // scroll up
+    case 0x07: // scroll down
+    case 0x09: // write character and attribute
+    case 0x0A: // write character only
+    case 0x0C: // write pixel
+    case 0x0E: // teletype output
+    case 0x13: // write string
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void LogInt10CallerIfNeeded(const uint8_t ah, const uint8_t al)
+{
+    if (!log_screen_writes)
+        return;
+
+    if (!ShouldLogInt10ScreenWrite(ah))
+        return;
+
+    const auto caller = GetScreenWriteCaller();
+    const char *const fmt = (caller.is_32bit)
+                                    ? "INT 10h AH=%02X AL=%02X from %04X:%08X"
+                                    : "INT 10h AH=%02X AL=%02X from %04X:%04X";
+
+    LOG_MSG(fmt, ah, al, caller.cs,
+            caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#if C_DEBUG
+    DEBUG_ShowMsg(fmt, ah, al, caller.cs,
+                  caller.is_32bit ? caller.ip : static_cast<uint16_t>(caller.ip));
+#endif
+}
 extern bool wpExtChar;
 extern bool ega200;
 extern int wpType;
@@ -69,9 +137,11 @@ Bitu INT10_Handler(void) {
 	//      within the DOS "box" will not work properly.
 	if(IS_DOSV && DOSV_CheckCJKVideoMode() && reg_ah != 0x03) DOSV_OffCursor();
 	else if(J3_IsJapanese()) J3_OffCursor();
-	INT10_SetCurMode();
+    INT10_SetCurMode();
 
-	switch (reg_ah) {
+    LogInt10CallerIfNeeded(reg_ah, reg_al);
+
+    switch (reg_ah) {
 	case 0x00:								/* Set VideoMode */
 		Mouse_BeforeNewVideoMode(true);
 		SetTrueVideoMode(reg_al);
